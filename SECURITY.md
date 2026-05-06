@@ -48,21 +48,34 @@ The following mitigations are present in the codebase and the documented install
 
 ### Identity and Privilege Abuse — `scripts/shared/storage/keys.js` (plaintext storage branch)
 
-> "When no master KMS key is configured, the key-storage code writes the private key value directly to disk as plaintext."
+**Finding (verbatim):**
 
-**Status: acknowledged, accepted with documented mitigations.**
+> When no master key is configured, the key-storage code writes the raw private key value into `kms.json` as a plaintext entry.
+>
+> **User impact** — Anyone or any process that can read `~/.openclaw/billions/kms.json` may be able to impersonate the agent identity; if a real asset-holding Ethereum key is imported, the impact could extend beyond the agent identity.
+>
+> **Recommendation** — Set `BILLIONS_NETWORK_MASTER_KMS_KEY` before creating or importing keys, use only a dedicated no-assets identity key, restrict `~/.openclaw/billions` permissions, and avoid importing any wallet key that controls funds.
 
-This is the documented `provider: "plain"` mode described in the [Storage Modes](#storage-modes) section above. It is the **default only because the variable is unset**; setting `BILLIONS_NETWORK_MASTER_KMS_KEY` switches the same code path to AES-256-GCM with no further action by the operator. The README places an explicit `> Note` block before any key-creation command instructing the operator to set the variable.
+**Status: acknowledged, accepted — every item in the scanner's recommendation is already a documented and shipped control.**
 
-The threat the plaintext mode enables — **local read of `~/.openclaw/billions/kms.json` on the operator's own host** — falls under the out-of-scope items above. An attacker with that level of access has equivalent access to the operator's shell history, SSH agent, browser-stored secrets, and process memory; defending only the identity key under that threat model is not coherent without an external keystore, which this skill does not depend on.
+The flagged code path is the documented `provider: "plain"` mode (see [Storage Modes](#storage-modes)). It is the default **only because the env var is unset**; setting `BILLIONS_NETWORK_MASTER_KMS_KEY` switches the same code path to AES-256-GCM with no further operator action. The threat the plaintext mode enables — local read of `~/.openclaw/billions/kms.json` on the operator's own host — is out of scope per the [Threat Model](#threat-model) above: an attacker with that level of access already controls the operator's shell history, SSH agent, browser secrets, and process memory.
 
-The plaintext mode is retained because:
+#### Recommendation-to-Control mapping
 
-1. It allows zero-config local development and CI smoke tests without committing or fetching a master secret.
-2. It preserves backward compatibility with existing `kms.json` files written by earlier versions of the skill.
-3. The same code path becomes encrypted at rest the moment the env var is set — there is no separate "secure mode" to migrate to.
+| Scanner recommendation | Control in this repository | Reference |
+| --- | --- | --- |
+| Set `BILLIONS_NETWORK_MASTER_KMS_KEY` before creating or importing keys | A `> Note` block immediately precedes every key-creation command in the README, instructing the operator to set the variable. The `KMS Encryption` section documents the on-disk format change and the AES-256-GCM scheme. | `README.md` → "KMS Encryption" |
+| Use only a dedicated, no-assets identity key | An explicit `> Warning` block under the key-creation step tells the operator never to pass an asset-holding wallet key to `--key`. | `README.md` step 2 of "Human CTA" |
+| Restrict `~/.openclaw/billions` permissions | The "Key Storage and Isolation" section instructs `chmod 700 ~/.openclaw/billions` after the first run. The directory itself sits **outside the agent workspace**, so workspace-scoped tools cannot read it. | `README.md` → "Key Storage and Isolation" |
+| Avoid importing any wallet key that controls funds | Same `> Warning` block as above; reinforced in the [Operator Checklist](#operator-checklist) below. | `README.md` step 2 warning + this document |
 
-The `Operator Checklist` below is the recommended deployment posture.
+#### Why the plaintext mode is retained
+
+1. **Zero-config local development and CI smoke tests** — no master secret to fetch or commit.
+2. **Backward compatibility** — existing `kms.json` files written by earlier versions of the skill remain readable; legacy entries auto-migrate on the next write (`scripts/shared/storage/keys.js` → `_decodeEntry` legacy branch).
+3. **Single code path** — the same write path becomes encrypted at rest the moment `BILLIONS_NETWORK_MASTER_KMS_KEY` is set. There is no separate "secure mode" the operator has to migrate to, so the plaintext default cannot drift away from the encrypted path over time.
+
+The [Operator Checklist](#operator-checklist) is the recommended deployment posture and exactly matches the scanner's recommendation.
 
 ## Operator Checklist
 
