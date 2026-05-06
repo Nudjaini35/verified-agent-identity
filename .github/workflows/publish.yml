@@ -1,0 +1,36 @@
+name: Publish to OpenClaw Hub
+
+on:
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Read version from VERSION file
+        id: version
+        run: echo "VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
+
+      - name: Sync version into scripts/package.json
+        run: |
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('scripts/package.json', 'utf8'));
+            pkg.version = process.env.VERSION;
+            fs.writeFileSync('scripts/package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+      - name: Login to OpenClaw Hub
+        run: clawhub login --token ${{ secrets.CLAWHUB_TOKEN }}
+
+      - name: Publish skill
+        run: clawhub sync
