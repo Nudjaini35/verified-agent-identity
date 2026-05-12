@@ -1,5 +1,5 @@
 {
-  "name": "identity",
+  "name": "verified-agent-identity",
   "version": "1.0.0",
   "description": "Billions OpenClaw verification skill",
   "scripts": {
