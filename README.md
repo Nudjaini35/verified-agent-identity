@@ -199,6 +199,7 @@ For all other ways to pass environment variables to a skill see the [OpenClaw en
 - Whitelisted domains:
   - `resolver.privado.id` (DID resolution)
   - `billions.network` (Billions Network interactions)
+  - `polygonid.me` (Polygon ID interactions)
 
 ## Documentation
 

@@ -142,6 +142,12 @@ async function main() {
     const entry = await getRequiredDidEntry(didsStorage, args.did);
 
     const payments = paymentRequired.accepts;
+    const paymentResource = paymentRequired.resource;
+
+    if (!paymentResource || !paymentResource.url) {
+      outputError("paymentRequired.resource.url is required", true);
+      return;
+    }
 
     // Phase 1: Show all payment options with their details and wait payment approval from user.
     if (payments.length > 0 && !args.paymentHash) {
@@ -149,7 +155,13 @@ async function main() {
         payments.map((p) => buildPaymentInfo(p, entry, kms)),
       );
       outputInputRequired(
-        { payments: paymentInfos },
+        {
+          resource: {
+            url: paymentResource && paymentResource.url,
+            description: paymentResource && paymentResource.description,
+          },
+          payments: paymentInfos,
+        },
         true,
       );
       return;
@@ -225,7 +237,7 @@ async function main() {
 
     // Phase 5: Fetch the resource with the payment signature
     const paymentSignature = btoa(JSON.stringify(paymentPayload));
-    const url = paymentRequired.resource.url;
+    const url = paymentResource.url;
     let response;
     response = await fetch(url, {
       headers: { "PAYMENT-SIGNATURE": paymentSignature },

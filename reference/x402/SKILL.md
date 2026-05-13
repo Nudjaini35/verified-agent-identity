@@ -16,7 +16,7 @@ Handle `402 Payment Required` HTTP responses by executing payment and fetching t
 
 Executes the x402 payment flow: signs the payment challenge, sends the `PAYMENT-SIGNATURE` header to the resource URL, and returns the result.
 
-- `--paymentRequired` — (required) The value of the `PAYMENT-REQUIRED` response header (base64-encoded or raw JSON string).
+- `--paymentRequired` — (required) The value of the `PAYMENT-REQUIRED` response header (base64-encoded or raw JSON string). Its `resource.url` field must be a non-empty string; otherwise the script returns status `failed`.
 - `--did` — (optional) The DID of the signer. Uses the default DID if omitted.
 - `--paymentHash` — (optional) The SHA-256 hash of the chosen payment option. Required on the second call to confirm the chosen payment — always, even when the server offers only one option.
 
@@ -67,16 +67,21 @@ node scripts/buildX402Payment.js \
 
 The script **never signs a payment on the first call**. Even when only one option is offered, it returns the list and waits for the user to confirm by selecting a `paymentHash`.
 
-The script outputs `status: "input_required"` and a list of payment options. Each payment option includes:
-- `hash` — the payment hash (use as `--paymentHash` in the next call)
-- `amount` — the payment amount
-- `asset` — the asset name (e.g., "USDC") or contract address
-- `network` — the network identifier (e.g., "eip155:84532")
-- `requiredAttestations` — informational list of attestation schema IDs that this payment type requires in general; may be non-empty even when the user already holds all of them — **do not use this field to decide whether to block the payment**
-- `hasAllAttestations` — `true` if the user already holds every required attestation and the payment can proceed; `false` if some are missing
-- `attestationLinks` — verification URLs the user must complete to obtain **missing** attestations; empty when `hasAllAttestations` is `true`
+The script outputs `status: "input_required"` with two top-level fields in `data`:
 
-**Present the options to the user.** Show the amount, asset, network, and whether attestations are required. Then ask the user to choose one payment option or decline payment.
+- `resource` — describes the protected resource the user is paying for:
+  - `resource.url` — the URL of the protected resource.
+  - `resource.description` — a human-readable description of what the resource provides.
+- `payments` — the list of payment options. Each option includes:
+  - `hash` — the payment hash (use as `--paymentHash` in the next call)
+  - `amount` — the payment amount
+  - `asset` — the asset name (e.g., "USDC") or contract address
+  - `network` — the network identifier (e.g., "eip155:84532")
+  - `requiredAttestations` — informational list of attestation schema IDs that this payment type requires in general; may be non-empty even when the user already holds all of them — **do not use this field to decide whether to block the payment**
+  - `hasAllAttestations` — `true` if the user already holds every required attestation and the payment can proceed; `false` if some are missing
+  - `attestationLinks` — verification URLs the user must complete to obtain **missing** attestations; empty when `hasAllAttestations` is `true`
+
+**Present the options to the user.** Always start by showing `resource.url` and `resource.description` so the user knows **what** they are paying for. Then show each payment option's amount, asset, network, and whether attestations are required. Ask the user to choose one payment option or decline payment.
 
 > **CRITICAL: How to read attestation status — always use `hasAllAttestations` and `attestationLinks`, never `requiredAttestations` alone**
 >
@@ -155,15 +160,18 @@ Server: 402 Payment Required
 
 Agent: [runs getIdentities.js — confirms identity exists]
 Agent: [runs buildX402Payment.js --paymentRequired 'eyJ4NDAyVmVyc2lvbi...']
-       → { "status": "input_required", "data": { "payments": [
-            { "hash": "a1b2c3...", "amount": "10000", "asset": "USDC", "network": "eip155:84532",
-              "requiredAttestations": [], "hasAllAttestations": true, "attestationLinks": [] },
-            { "hash": "d4e5f6...", "amount": "6000", "asset": "USDC", "network": "eip155:84532",
-              "requiredAttestations": ["0xca35..."], "hasAllAttestations": false,
-              "attestationLinks": ["https://wallet.billions.network#request_uri=..."] }
-          ]}}
+       → { "status": "input_required", "data": {
+            "resource": { "url": "https://api.example.com/weather", "description": "Weather data" },
+            "payments": [
+              { "hash": "a1b2c3...", "amount": "10000", "asset": "USDC", "network": "eip155:84532",
+                "requiredAttestations": [], "hasAllAttestations": true, "attestationLinks": [] },
+              { "hash": "d4e5f6...", "amount": "6000", "asset": "USDC", "network": "eip155:84532",
+                "requiredAttestations": ["0xca35..."], "hasAllAttestations": false,
+                "attestationLinks": ["https://wallet.billions.network#request_uri=..."] }
+            ]}}
 
-Agent: "There are 2 payment options:
+Agent: "You are about to pay for: Weather data (https://api.example.com/weather).
+        There are 2 payment options:
         1) 10000 USDC on eip155:84532 — no attestations required
         2) 6000 USDC on eip155:84532 — requires attestation (missing).
            Complete verification: [link]
