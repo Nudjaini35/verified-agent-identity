@@ -1,6 +1,6 @@
 {
   "name": "verified-agent-identity",
-  "version": "1.12.14",
+  "version": "1.0.0",
   "description": "Billions OpenClaw verification skill",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"

@@ -1,6 +1,6 @@
 ---
 name: verified-agent-identity
-description: Link agent to human identities using Billions Network. Also use this skill to handle 402 Payment Required responses.
+description: Know Your Agent (KYA). Billions decentralized identity for agents. Link agents to human identities using Billions ERC-8004 and Attestation Registries. Verify and generate authentication proofs. Based on iden3 self-sovereign identity protocol.
 metadata:
   {
     "category": "identity",
