@@ -18,7 +18,7 @@ Executes the x402 payment flow: signs the payment challenge, sends the `PAYMENT-
 
 - `--paymentRequired` — (required) The value of the `PAYMENT-REQUIRED` response header (base64-encoded or raw JSON string).
 - `--did` — (optional) The DID of the signer. Uses the default DID if omitted.
-- `--paymentHash` — (optional) The SHA-256 hash of the chosen payment option. Required on the second call when the server offers multiple payment options.
+- `--paymentHash` — (optional) The SHA-256 hash of the chosen payment option. Required on the second call to confirm the chosen payment — always, even when the server offers only one option.
 
 ---
 
@@ -38,9 +38,8 @@ Check `data` to determine the reason:
 
 | `data` field                | Meaning                                                                                                    |
 | --------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `data.multiplePayments`     | Multiple payment options available. Present them to the user and call again with `--paymentHash`.          |
 | `data.attestationsRequired` | Missing attestations. Show `data.attestationLinks` to the user and wait before retrying.                   |
-| `data.maxUseExceeded`        | The chosen payment has exceeded its maximum allowed uses. Go back and choose a different payment option.   |
+| `data.maxUseExceeded`       | The chosen payment has exceeded its maximum allowed uses. Go back and choose a different payment option.   |
 | `data.newPaymentRequired`   | The server returned a new 402 after payment. Call the script again with this value as `--paymentRequired`. |
 
 ---
@@ -66,14 +65,9 @@ node scripts/buildX402Payment.js \
   --paymentRequired '<base64_or_json>'
 ```
 
-**If the server offers a single payment option**: the script signs the payment, sends it to the resource URL, and returns the result. Check the output status:
+The script **never signs a payment on the first call**. Even when only one option is offered, it returns the list and waits for the user to confirm by selecting a `paymentHash`.
 
-- `success` — the resource body is in `data`. You're done.
-- `input_required` with `data.newPaymentRequired` — the server returned another 402. Go to **step 6**.
-- `failed` — show the error to the user.
-
-**If the server offers multiple payment options**: the script outputs `status: "input_required"` with `data.multiplePayments: true` and a list of payment options. Each payment option includes:
-
+The script outputs `status: "input_required"` and a list of payment options. Each payment option includes:
 - `hash` — the payment hash (use as `--paymentHash` in the next call)
 - `amount` — the payment amount
 - `asset` — the asset name (e.g., "USDC") or contract address
@@ -82,7 +76,7 @@ node scripts/buildX402Payment.js \
 - `hasAllAttestations` — `true` if the user already holds every required attestation and the payment can proceed; `false` if some are missing
 - `attestationLinks` — verification URLs the user must complete to obtain **missing** attestations; empty when `hasAllAttestations` is `true`
 
-**Present the options to the user.** Show the amount, asset, network, and whether attestations are needed. Then ask the user to choose one payment option.
+**Present the options to the user.** Show the amount, asset, network, and whether attestations are required. Then ask the user to choose one payment option or decline payment.
 
 > **CRITICAL: How to read attestation status — always use `hasAllAttestations` and `attestationLinks`, never `requiredAttestations` alone**
 >
@@ -103,7 +97,7 @@ node scripts/buildX402Payment.js \
 
 ### 5. Second call — execute chosen payment
 
-Once the user selects a payment, call the script again with the chosen `--paymentHash`:
+This step is **always required** — there is no fast-path that skips it, even when only one payment option was offered. Once the user selects (or confirms) a payment, call the script again with the chosen `--paymentHash`:
 
 ```bash
 node scripts/buildX402Payment.js \
@@ -144,7 +138,6 @@ If `buildX402Payment.js` returns status `input_required`:
 
 - **DO NOT** make your own HTTP request to the resource.
 - Read `data` to determine what is needed:
-  - `data.multiplePayments` — present payment options, call again with `--paymentHash`
   - `data.attestationsRequired` — show links to user, wait, then retry
   - `data.maxUseExceeded` — the chosen payment exceeded its max uses; go back and ask the user to pick a different payment option
   - `data.newPaymentRequired` — call the script again with the new `--paymentRequired` value (loop)
@@ -153,21 +146,7 @@ If `buildX402Payment.js` returns status `input_required`:
 
 ## Examples
 
-### Single payment (direct execution)
-
-```
-Agent: [fetches https://example.com/api/resource]
-Server: 402 Payment Required
-  Header: PAYMENT-REQUIRED: "eyJhbGciOi..."
-
-Agent: [runs getIdentities.js — confirms identity exists]
-Agent: [runs buildX402Payment.js --paymentRequired 'eyJhbGciOi...']
-       → { "status": "success", "data": { "temperature": 22, "city": "Kyiv" } }
-
-Agent: "The weather data shows 22°C in Kyiv."
-```
-
-### Multiple payments (two-phase flow)
+### Standard payment flow (user confirmation required)
 
 ```
 Agent: [fetches https://example.com/api/resource]
@@ -176,7 +155,7 @@ Server: 402 Payment Required
 
 Agent: [runs getIdentities.js — confirms identity exists]
 Agent: [runs buildX402Payment.js --paymentRequired 'eyJ4NDAyVmVyc2lvbi...']
-       → { "status": "input_required", "data": { "multiplePayments": true, "payments": [
+       → { "status": "input_required", "data": { "payments": [
             { "hash": "a1b2c3...", "amount": "10000", "asset": "USDC", "network": "eip155:84532",
               "requiredAttestations": [], "hasAllAttestations": true, "attestationLinks": [] },
             { "hash": "d4e5f6...", "amount": "6000", "asset": "USDC", "network": "eip155:84532",
@@ -208,7 +187,7 @@ Agent: [runs buildX402Payment.js --paymentRequired 'eyJ4NDAy...']
        → { "status": "success", "data": { "temperature": 22, "city": "Kyiv" } }
 ```
 
-### Attestation required (single payment)
+### Attestation required (on chosen payment)
 
 ```
 Agent: [runs buildX402Payment.js --paymentRequired 'eyJ4NDAy...' --paymentHash 'd4e5f6...']

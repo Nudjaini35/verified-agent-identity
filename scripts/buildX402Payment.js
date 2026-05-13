@@ -143,13 +143,13 @@ async function main() {
 
     const payments = paymentRequired.accepts;
 
-    // Phase 1: Multiple payments — show selection to user
-    if (payments.length > 1 && !args.paymentHash) {
+    // Phase 1: Show all payment options with their details and wait payment approval from user.
+    if (payments.length > 0 && !args.paymentHash) {
       const paymentInfos = await Promise.all(
         payments.map((p) => buildPaymentInfo(p, entry, kms)),
       );
       outputInputRequired(
-        { multiplePayments: true, payments: paymentInfos },
+        { payments: paymentInfos },
         true,
       );
       return;
