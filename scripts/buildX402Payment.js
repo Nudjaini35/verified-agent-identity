@@ -16,7 +16,7 @@ const {
   MissingAttestationsError,
   checkAttestation,
   isMaxUseExceededError,
-} = require("@privadoid/x402-human-proof-client/packages/client");
+} = require("@billionsnetwork/x402-human-proof-client");
 const { toClientEvmSigner } = require("@x402/evm");
 const {
   schemaId,
