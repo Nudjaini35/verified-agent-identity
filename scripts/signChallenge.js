@@ -7,13 +7,12 @@ const {
 const { getInitializedRuntime } = require("./shared/bootstrap");
 const {
   parseArgs,
-  formatError,
+  outputError,
   outputSuccess,
   createDidDocument,
   getAuthResponseMessage,
   buildEthereumAddressFromDid,
-  sendDirectMessage,
-  codeFormating,
+  getRequiredDidEntry,
 } = require("./shared/utils");
 const { buildJsonAttestation } = require("./shared/attestation");
 
@@ -53,38 +52,21 @@ async function main() {
   try {
     const args = parseArgs();
 
-    if (!args.to || !args.challenge) {
-      console.error("Error: --to and --challenge are required");
-      console.error(
-        "Usage: node scripts/signChallenge.js --to <sender> --challenge <challenge> [--did <did>]",
+    if (!args.challenge) {
+      throw new Error(
+        "--challenge is required. Usage: node scripts/signChallenge.js --challenge <challenge> [--did <did>]",
       );
-      process.exit(1);
     }
 
     const { kms, didsStorage } = await getInitializedRuntime();
-
-    // Get DID entry - either specific DID or default
-    const entry = args.did
-      ? await didsStorage.find(args.did)
-      : await didsStorage.getDefault();
-
-    if (!entry) {
-      const errorMsg = args.did
-        ? `No DID ${args.did} found`
-        : "No default DID found";
-      console.error(errorMsg);
-      process.exit(1);
-    }
+    const entry = await getRequiredDidEntry(didsStorage, args.did);
 
     const challenge = JSON.parse(args.challenge);
     const tokenString = await signChallenge(challenge, entry, kms);
 
-    sendDirectMessage(args.to, codeFormating(tokenString));
-
-    outputSuccess({ success: true });
+    outputSuccess({ token: tokenString });
   } catch (error) {
-    console.error(formatError(error));
-    process.exit(1);
+    outputError(error, true);
   }
 }
 

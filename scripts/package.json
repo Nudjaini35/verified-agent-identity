@@ -1,6 +1,6 @@
 {
   "name": "verified-agent-identity",
-  "version": "0.0.2",
+  "version": "1.0.0",
   "description": "Billions OpenClaw verification skill",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -13,10 +13,15 @@
   "author": "BillionsNetwork",
   "license": "UNLICENSED",
   "dependencies": {
-    "@0xpolygonid/js-sdk": "^1.18.1",
-    "@iden3/js-iden3-auth": "^1.14.0",
-    "@iden3/js-iden3-core": "^1.4.1",
-    "ethers": "^6.13.4",
-    "uuid": "^11.0.3"
+    "@0xpolygonid/js-sdk": "1.42.1",
+    "@billionsnetwork/x402-human-proof-client": "^0.1.6",
+    "@iden3/js-iden3-auth": "1.14.0",
+    "@iden3/js-iden3-core": "1.8.0",
+    "@noble/curves": "1.9.2",
+    "@x402/core": "2.9.0",
+    "@x402/evm": "2.9.0",
+    "ethers": "6.13.4",
+    "uuid": "11.0.3",
+    "viem": "2.47.6"
   }
 }
