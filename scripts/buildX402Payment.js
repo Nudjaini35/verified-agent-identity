@@ -1,8 +1,9 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const yargs = require("yargs/yargs");
+const { hideBin } = require("yargs/helpers");
 const {
-  parseArgs,
   hashstr,
   outputSuccess,
   outputError,
@@ -192,103 +193,162 @@ async function buildPaymentInfo(payment, entry, kms) {
   };
 }
 
+function parseCliArgs() {
+  return yargs(hideBin(process.argv))
+    .scriptName("buildX402Payment")
+    .usage(
+      "$0 [options]\n\n" +
+        "Execute the x402 payment flow in two phases.\n\n" +
+        "Phase 1 — Discover (--resource only):\n" +
+        "  Fetches the 402 challenge from the resource, caches the\n" +
+        "  PAYMENT-REQUIRED payload to a temp file named by its hash, and\n" +
+        "  returns { paymentRequiredFilePath, paymentOptions }. Never signs a\n" +
+        "  payment. Pass --paymentHash here is an error.\n\n" +
+        "Phase 2 — Execute (--paymentRequiredFilePath + --paymentHash):\n" +
+        "  Reads the cached payment-required file, looks up the chosen option\n" +
+        "  by --paymentHash, and signs/sends the payment. Cannot be combined\n" +
+        "  with --resource.",
+    )
+    .option("resource", {
+      type: "string",
+      describe:
+        "Phase 1 only. URL of the resource that returns 402 with a " +
+        "PAYMENT-REQUIRED header. Mutually exclusive with " +
+        "--paymentRequiredFilePath and --paymentHash.",
+    })
+    .option("paymentRequiredFilePath", {
+      type: "string",
+      describe:
+        "Phase 2 only. Path to the cached payment-required JSON file " +
+        "returned by phase 1. Must be combined with --paymentHash. " +
+        "Mutually exclusive with --resource.",
+    })
+    .option("paymentHash", {
+      type: "string",
+      describe:
+        "Phase 2 only. Hash of the payment option to execute (from phase 1's " +
+        "paymentOptions[].hash). Must be combined with --paymentRequiredFilePath.",
+    })
+    .option("did", {
+      type: "string",
+      describe:
+        "Optional. DID to use for signing. Defaults to the default DID in local storage.",
+    })
+    .example(
+      "$0 --resource https://api.example.com/paid",
+      "Phase 1: discover payment options and cache the challenge",
+    )
+    .example(
+      "$0 --paymentRequiredFilePath /tmp/<hash>.json --paymentHash <hash>",
+      "Phase 2: execute the selected payment from the cached challenge",
+    )
+    .example(
+      "$0 --resource https://api.example.com/paid --did did:iden3:...",
+      "Phase 1 with an explicit DID instead of the default",
+    )
+    .check((argv) => {
+      const hasResource = Boolean(argv.resource);
+      const hasFilePath = Boolean(argv.paymentRequiredFilePath);
+      const hasHash = Boolean(argv.paymentHash);
+
+      if (!hasResource && !hasFilePath) {
+        throw new Error(
+          "Provide --resource (phase 1) or --paymentRequiredFilePath + --paymentHash (phase 2).",
+        );
+      }
+      if (hasResource && hasFilePath) {
+        throw new Error(
+          "--resource and --paymentRequiredFilePath are mutually exclusive. " +
+            "Use --resource alone for phase 1, or " +
+            "--paymentRequiredFilePath + --paymentHash for phase 2.",
+        );
+      }
+      if (hasResource && hasHash) {
+        throw new Error(
+          "--paymentHash is not allowed with --resource. Run phase 1 with " +
+            "--resource alone, then pass the returned paymentRequiredFilePath " +
+            "together with --paymentHash in phase 2.",
+        );
+      }
+      if (hasFilePath && !hasHash) {
+        throw new Error(
+          "--paymentHash is required with --paymentRequiredFilePath (phase 2).",
+        );
+      }
+      return true;
+    })
+    .strict()
+    .help("help")
+    .alias("help", "h")
+    .wrap(Math.min(120, yargs().terminalWidth()))
+    .fail((msg, err, y) => {
+      console.error(y.help());
+      console.error(`\nError: ${msg || (err && err.message) || "invalid arguments"}`);
+      process.exit(1);
+    })
+    .parse();
+}
+
+function requirePaymentResourceUrl(paymentRequired) {
+  const paymentResource = paymentRequired.resource;
+  if (!paymentResource || !paymentResource.url) {
+    outputError("paymentRequired.resource.url is required", true);
+    return null;
+  }
+  return paymentResource;
+}
+
+async function runDiscovery(args, entry, kms) {
+  const paymentRequired = await fetchPaymentRequired(args.resource);
+  const paymentResource = requirePaymentResourceUrl(paymentRequired);
+  if (!paymentResource) return;
+
+  const { filePath } = persistPaymentRequired(paymentRequired);
+  const paymentOptions = await Promise.all(
+    paymentRequired.accepts.map((p) => buildPaymentInfo(p, entry, kms)),
+  );
+
+  outputInputRequired(
+    {
+      resource: {
+        url: paymentResource.url,
+        description: paymentResource.description,
+      },
+      paymentOptions,
+      paymentRequiredFilePath: filePath,
+    },
+    true,
+  );
+}
+
 async function main() {
   try {
-    const args = parseArgs();
-
-    const hasResource = Boolean(args.resource);
-    const hasFilePath = Boolean(args.paymentRequiredFilePath);
-
-    if (!hasResource && !hasFilePath) {
-      outputError(
-        "--resource or --paymentRequiredFilePath is required",
-        true,
-      );
-      return;
-    }
-    if (hasResource && hasFilePath) {
-      outputError(
-        "--resource and --paymentRequiredFilePath are mutually exclusive",
-        true,
-      );
-      return;
-    }
+    const args = parseCliArgs();
 
     const { kms, memoryKeyStore, didsStorage } = await getInitializedRuntime();
     const entry = await getRequiredDidEntry(didsStorage, args.did);
 
-    let paymentRequired;
-    let paymentRequiredFilePath;
-
-    if (hasResource) {
-      paymentRequired = await fetchPaymentRequired(args.resource);
-      const persisted = persistPaymentRequired(paymentRequired);
-      paymentRequiredFilePath = persisted.filePath;
-    } else {
-      paymentRequired = loadPaymentRequiredFile(args.paymentRequiredFilePath);
-      paymentRequiredFilePath = args.paymentRequiredFilePath;
-    }
-
-    const paymentResource = paymentRequired.resource;
-    if (!paymentResource || !paymentResource.url) {
-      outputError("paymentRequired.resource.url is required", true);
-      return;
-    }
-    const payments = paymentRequired.accepts;
-
-    // Phase 1: Show all payment options with their details and wait payment approval from user.
-    if (hasResource && !args.paymentHash) {
-      const paymentInfos = await Promise.all(
-        payments.map((p) => buildPaymentInfo(p, entry, kms)),
-      );
-      outputInputRequired(
-        {
-          resource: {
-            url: paymentResource.url,
-            description: paymentResource.description,
-          },
-          payments: paymentInfos,
-          paymentRequiredFilePath,
-        },
-        true,
-      );
+    // Phase 1: --resource only. Fetch, cache, return options.
+    if (args.resource) {
+      await runDiscovery(args, entry, kms);
       return;
     }
 
-    // Phase 2 requires --paymentHash to identify which option to execute.
-    if (hasFilePath && !args.paymentHash) {
-      outputError(
-        "--paymentHash is required when using --paymentRequiredFilePath",
-        true,
-      );
+    // Phase 2: --paymentRequiredFilePath + --paymentHash. Load file, find hash, execute.
+    const paymentRequired = loadPaymentRequiredFile(args.paymentRequiredFilePath);
+    const paymentResource = requirePaymentResourceUrl(paymentRequired);
+    if (!paymentResource) return;
+
+    const matched = paymentRequired.accepts.find(
+      (p) => getPaymentHash(p) === args.paymentHash,
+    );
+    if (!matched) {
+      outputError("No payment matching the provided --paymentHash", true);
       return;
     }
+    paymentRequired.accepts = [matched];
 
-    // Phase 2: re-fetch the resource and verify the cached challenge still matches.
-    if (hasFilePath) {
-      const fresh = await fetchPaymentRequired(paymentResource.url);
-      if (getPaymentRequiredHash(fresh) !== getPaymentRequiredHash(paymentRequired)) {
-        outputError(
-          "Cached payment-required no longer matches resource; re-run with --resource",
-          true,
-        );
-        return;
-      }
-    }
-
-    // Phase 2: User selected a payment by hash - filter to it
-    if (args.paymentHash) {
-      const matched = payments.find(
-        (p) => getPaymentHash(p) === args.paymentHash,
-      );
-      if (!matched) {
-        outputError("No payment matching the provided --paymentHash", true);
-        return;
-      }
-      paymentRequired.accepts = [matched];
-    }
-
-    // Phase 3: Single payment - check attestations before proceeding
+    // Phase 2: Single payment - check attestations before proceeding
     const selectedPayment = paymentRequired.accepts[0];
     const missingAttestations = await getMissingAttestations(
       entry.did,

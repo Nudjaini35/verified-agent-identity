@@ -11,18 +11,21 @@ Handle `402 Payment Required` HTTP responses by executing payment and fetching t
 
 ### buildX402Payment.js
 
-**Command (phase 1)**: `node scripts/buildX402Payment.js --resource <url> [--did <did>]`
-**Command (phase 2)**: `node scripts/buildX402Payment.js --paymentRequiredFilePath <path> --paymentHash <hash> [--did <did>]`
+**Command (phase 1 — discover)**: `node scripts/buildX402Payment.js --resource <url> [--did <did>]`
+**Command (phase 2 — execute)**: `node scripts/buildX402Payment.js --paymentRequiredFilePath <path> --paymentHash <hash> [--did <did>]`
 **Hint**: **NEVER reuse or cache a previous response from this script.** Every invocation produces unique, time-sensitive output (nonces, signatures, payment tokens). Always execute the script again to get a fresh result — even if the arguments are identical to a prior call.
 
-Executes the x402 payment flow. On phase 1, the script itself does the HTTP call to the resource, expects a `402` response with a `PAYMENT-REQUIRED` header, caches the decoded challenge to a temp file, and returns the available payment options together with the file path. On phase 2, the script reads the cached challenge from that file, re-fetches the resource to verify the challenge is still fresh, signs the chosen payment, sends the `PAYMENT-SIGNATURE` header, and returns the result.
+Executes the x402 payment flow in two strictly separated phases.
 
-- `--resource` — (phase 1 only) The URL of the protected resource. The script fetches it and expects HTTP 402 with a `PAYMENT-REQUIRED` header. If the response is any other status, or the header is missing, the script returns status `failed`.
-- `--paymentRequiredFilePath` — (phase 2 only) Absolute path to the cached payment-required JSON file returned by phase 1. Mutually exclusive with `--resource`.
-- `--paymentHash` — (phase 2, required) The SHA-256 hash of the chosen payment option from phase 1. Always required on phase 2, even when only one option was offered.
+- **Phase 1** (`--resource` only): the script fetches the resource, expects a `402` response with a `PAYMENT-REQUIRED` header, caches the decoded challenge to a temp file named by its SHA-256 hash, and returns the available payment options together with the cached file path. It never signs a payment.
+- **Phase 2** (`--paymentRequiredFilePath` + `--paymentHash`): the script reads the cached challenge file, looks up the chosen payment option by its `--paymentHash`, signs the payment, sends the `PAYMENT-SIGNATURE` header to the resource, and returns the result.
+
+- `--resource` — (phase 1 only) The URL of the protected resource. The script fetches it and expects HTTP 402 with a `PAYMENT-REQUIRED` header. If the response is any other status, or the header is missing, the script returns status `failed`. Cannot be combined with `--paymentRequiredFilePath` or `--paymentHash`.
+- `--paymentRequiredFilePath` — (phase 2 only) Absolute path to the cached payment-required JSON file returned by phase 1. Must be combined with `--paymentHash`. Mutually exclusive with `--resource`.
+- `--paymentHash` — (phase 2 only, required) The SHA-256 hash of the chosen payment option from phase 1. Always required on phase 2, even when only one option was offered. Cannot be passed with `--resource`.
 - `--did` — (optional) The DID of the signer. Uses the default DID if omitted.
 
-Either `--resource` or `--paymentRequiredFilePath` must be supplied; passing both is an error.
+You **must** pick exactly one phase per invocation. Passing `--resource` together with `--paymentHash` (or with `--paymentRequiredFilePath`) is rejected.
 
 ---
 
@@ -76,7 +79,7 @@ The script outputs `status: "input_required"` with three top-level fields in `da
 - `resource` — describes the protected resource the user is paying for:
   - `resource.url` — the URL of the protected resource.
   - `resource.description` — a human-readable description of what the resource provides.
-- `payments` — the list of payment options. Each option includes:
+- `paymentOptions` — the list of payment options. Each option includes:
   - `hash` — the payment hash (use as `--paymentHash` in the next call)
   - `amount` — the payment amount
   - `asset` — the asset name (e.g., "USDC") or contract address
@@ -115,7 +118,7 @@ node scripts/buildX402Payment.js \
   --paymentHash '<hash of chosen payment>'
 ```
 
-The script re-fetches the resource to confirm the cached challenge is still the live one. If the server has rotated the challenge in the meantime, the script returns status `failed` with a message asking you to re-run phase 1 with `--resource`.
+**Do not pass `--resource` here.** Phase 2 reads the cached challenge from `--paymentRequiredFilePath` and looks up the payment by `--paymentHash`; combining either with `--resource` is rejected. If the server has rotated the challenge in the meantime, the signed payment will be rejected by the server and the script will report `data.newPaymentRequired` (see step 7) — re-run phase 1 to discover the new challenge.
 
 **If the chosen payment requires attestations the user doesn't have**: the script outputs `status: "input_required"` with `data.attestationsRequired: true` and `data.attestationLinks` containing verification URLs. Show these links to the user and wait for them to complete the attestation before retrying.
 
@@ -169,7 +172,7 @@ Agent: [runs getIdentities.js — confirms identity exists]
 Agent: [runs buildX402Payment.js --resource 'https://api.example.com/weather']
        → { "status": "input_required", "data": {
             "resource": { "url": "https://api.example.com/weather", "description": "Weather data" },
-            "payments": [
+            "paymentOptions": [
               { "hash": "a1b2c3...", "amount": "10000", "asset": "USDC", "network": "eip155:84532",
                 "requiredAttestations": [], "hasAllAttestations": true, "attestationLinks": [] },
               { "hash": "d4e5f6...", "amount": "6000", "asset": "USDC", "network": "eip155:84532",
@@ -200,7 +203,7 @@ Agent: [runs buildX402Payment.js --paymentRequiredFilePath '/tmp/9f3c....json' -
        → { "status": "input_required", "data": { "newPaymentRequired": "eyJ4NDAy..." } }
 
 Agent: [runs buildX402Payment.js --resource 'https://api.example.com/weather']
-       → { "status": "input_required", "data": { "resource": {...}, "payments": [...],
+       → { "status": "input_required", "data": { "resource": {...}, "paymentOptions": [...],
             "paymentRequiredFilePath": "/tmp/b71e....json" }}
 …
 Agent: [runs buildX402Payment.js --paymentRequiredFilePath '/tmp/b71e....json' --paymentHash '...']
@@ -236,14 +239,4 @@ User: "Option 1"
 
 Agent: [runs buildX402Payment.js --paymentRequiredFilePath '/tmp/9f3c....json' --paymentHash 'a1b2c3...']
        → { "status": "success", "data": { "temperature": 22, "city": "Kyiv" } }
-```
-
-### Stale cached challenge
-
-```
-Agent: [runs buildX402Payment.js --paymentRequiredFilePath '/tmp/9f3c....json' --paymentHash 'a1b2c3...']
-       → { "status": "failed", "data": "Cached payment-required no longer matches resource; re-run with --resource" }
-
-Agent: [runs buildX402Payment.js --resource 'https://api.example.com/weather']
-       → { "status": "input_required", "data": { ..., "paymentRequiredFilePath": "/tmp/<new hash>.json" }}
 ```
