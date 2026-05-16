@@ -1,3 +1,6 @@
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
 const {
   parseArgs,
   hashstr,
@@ -29,6 +32,77 @@ const { v4: uuidv4 } = require("uuid");
 
 function getPaymentHash(payment) {
   return hashstr(JSON.stringify(payment));
+}
+
+function getPaymentRequiredHash(paymentRequired) {
+  return hashstr(JSON.stringify(paymentRequired));
+}
+
+function parsePaymentRequiredHeader(headerValue) {
+  const trimmed = headerValue.trim();
+  return trimmed.startsWith("{")
+    ? JSON.parse(trimmed)
+    : JSON.parse(atob(trimmed));
+}
+
+async function fetchPaymentRequired(url) {
+  let response;
+  try {
+    response = await fetch(url);
+  } catch (e) {
+    outputError(`Failed to reach resource: ${e.message || e}`, true);
+    return;
+  }
+  if (response.status !== 402) {
+    outputError(`Expected 402 from ${url}, got ${response.status}`, true);
+    return;
+  }
+  const headerValue = response.headers.get("payment-required");
+  if (!headerValue) {
+    outputError(
+      "Resource returned 402 but no PAYMENT-REQUIRED header",
+      true,
+    );
+    return;
+  }
+  try {
+    return parsePaymentRequiredHeader(headerValue);
+  } catch (e) {
+    outputError(
+      `PAYMENT-REQUIRED header is not valid JSON or Base64 JSON: ${e.message || e}`,
+      true,
+    );
+  }
+}
+
+function persistPaymentRequired(paymentRequired) {
+  const hash = getPaymentRequiredHash(paymentRequired);
+  const filePath = path.join(os.tmpdir(), `${hash}.json`);
+  const tempPath = `${filePath}.tmp`;
+  fs.writeFileSync(tempPath, JSON.stringify(paymentRequired, null, 2), "utf-8");
+  fs.renameSync(tempPath, filePath);
+  return { hash, filePath };
+}
+
+function loadPaymentRequiredFile(filePath) {
+  let raw;
+  try {
+    raw = fs.readFileSync(filePath, "utf-8");
+  } catch (e) {
+    outputError(
+      `Failed to read --paymentRequiredFilePath ${filePath}: ${e.message || e}`,
+      true,
+    );
+    return;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    outputError(
+      `--paymentRequiredFilePath ${filePath} is not valid JSON: ${e.message || e}`,
+      true,
+    );
+  }
 }
 
 function getRequiredAttestations(payment) {
@@ -122,49 +196,84 @@ async function main() {
   try {
     const args = parseArgs();
 
-    if (!args.paymentRequired) {
-      outputError("--paymentRequired is required", true);
-    }
+    const hasResource = Boolean(args.resource);
+    const hasFilePath = Boolean(args.paymentRequiredFilePath);
 
-    let paymentRequired;
-    try {
-      paymentRequired = args.paymentRequired.trim().startsWith("{")
-        ? JSON.parse(args.paymentRequired)
-        : JSON.parse(atob(args.paymentRequired));
-    } catch (e) {
+    if (!hasResource && !hasFilePath) {
       outputError(
-        "--paymentRequired must be valid JSON or Base64 encoded JSON",
+        "--resource or --paymentRequiredFilePath is required",
         true,
       );
+      return;
+    }
+    if (hasResource && hasFilePath) {
+      outputError(
+        "--resource and --paymentRequiredFilePath are mutually exclusive",
+        true,
+      );
+      return;
     }
 
     const { kms, memoryKeyStore, didsStorage } = await getInitializedRuntime();
     const entry = await getRequiredDidEntry(didsStorage, args.did);
 
-    const payments = paymentRequired.accepts;
-    const paymentResource = paymentRequired.resource;
+    let paymentRequired;
+    let paymentRequiredFilePath;
 
+    if (hasResource) {
+      paymentRequired = await fetchPaymentRequired(args.resource);
+      const persisted = persistPaymentRequired(paymentRequired);
+      paymentRequiredFilePath = persisted.filePath;
+    } else {
+      paymentRequired = loadPaymentRequiredFile(args.paymentRequiredFilePath);
+      paymentRequiredFilePath = args.paymentRequiredFilePath;
+    }
+
+    const paymentResource = paymentRequired.resource;
     if (!paymentResource || !paymentResource.url) {
       outputError("paymentRequired.resource.url is required", true);
       return;
     }
+    const payments = paymentRequired.accepts;
 
     // Phase 1: Show all payment options with their details and wait payment approval from user.
-    if (payments.length > 0 && !args.paymentHash) {
+    if (hasResource && !args.paymentHash) {
       const paymentInfos = await Promise.all(
         payments.map((p) => buildPaymentInfo(p, entry, kms)),
       );
       outputInputRequired(
         {
           resource: {
-            url: paymentResource && paymentResource.url,
-            description: paymentResource && paymentResource.description,
+            url: paymentResource.url,
+            description: paymentResource.description,
           },
           payments: paymentInfos,
+          paymentRequiredFilePath,
         },
         true,
       );
       return;
+    }
+
+    // Phase 2 requires --paymentHash to identify which option to execute.
+    if (hasFilePath && !args.paymentHash) {
+      outputError(
+        "--paymentHash is required when using --paymentRequiredFilePath",
+        true,
+      );
+      return;
+    }
+
+    // Phase 2: re-fetch the resource and verify the cached challenge still matches.
+    if (hasFilePath) {
+      const fresh = await fetchPaymentRequired(paymentResource.url);
+      if (getPaymentRequiredHash(fresh) !== getPaymentRequiredHash(paymentRequired)) {
+        outputError(
+          "Cached payment-required no longer matches resource; re-run with --resource",
+          true,
+        );
+        return;
+      }
     }
 
     // Phase 2: User selected a payment by hash - filter to it
