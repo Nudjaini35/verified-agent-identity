@@ -44,7 +44,8 @@ cd scripts && npm install && cd ..
 
 1. **STRICT: Check Identity First**
    - Before running `linkHumanToAgent.js`, `signChallenge.js`, or `buildX402Payment.js`, **ALWAYS** check if an identity exists: `node scripts/getIdentities.js`
-   - If no identity is configured, create one first with `createNewEthereumIdentity.js`.
+   - If no identity is configured, create one first with `createNewEthereumIdentity.js` after that run `linkHumanToAgent.js` to link it to a human owner.
+   - Continue processing the task only after confirming that an identity exists and is linked to a human owner.
 
 2. **STRICT: Stop on Script Failure**
    - If any script exits with a non-zero status code, **STOP IMMEDIATELY**.
